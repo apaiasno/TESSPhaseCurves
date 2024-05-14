@@ -4,6 +4,7 @@
 
 # Imports
 import numpy as np
+import scipy.stats
 import astropy.units as u
 import lightkurve as lk
 
@@ -191,5 +192,82 @@ def fold_lk(lc, P, epoch_time):
     lc_fold = lk.LightCurve(lc_dict)
     return lc_fold
 
+### Bayesian functions for parameter estimation with dynesty ###
+def prior_transform(unif, priors, priors_bool):
+    ''' Transforms the uniform random variable unif~[0, 1] to either a uniform prior over a different
+        range of interest or a Gaussian prior
 
+        Parameters
+        ----------
+        unif : array-like
+            Array of uniform random variables for each parameter. Length of unif is equal to the number of model
+            parameters.
+        priors : 2D numpy array
+            Pairs of values describing the priors for each model parameter. For uniform priors, the first value
+            of the pair is the lower bound and the second value is the upper bound. For Gaussian priors, the
+            first value of the pair is the central value of the Gaussian and the second value is the 1-sigma width.
+        priors_bool : 1D numpy array
+            True or False values ascribed to each model parameter. True if uniform prior, False if Gaussian prior.
+
+        Returns
+        -------
+        x : array-like
+            Prior transforms for each model parameter.
+    '''
+
+    x = np.array(unif)
+
+    # Uniform priors
+    prior_range = np.diff(priors[priors_bool], axis=1).flatten()/2.
+    prior_center = np.mean(priors[priors_bool], axis=1)
+    x[priors_bool] = 2. * unif[priors_bool] - 1.  # scale and shift to [-1., 1.)
+    x[priors_bool] *= prior_range
+    x[priors_bool] += prior_center
+
+    # Bivariate Normal
+    t = scipy.stats.norm.ppf(unif[~priors_bool])  # convert to standard normal
+    Csqrt = priors[~priors_bool][:,1] * np.identity(np.sum(~priors_bool))
+    x[~priors_bool] = np.dot(Csqrt, t)  # correlate with appropriate covariance
+    mu = priors[~priors_bool][:,0]  # mean
+    x[~priors_bool] += mu  # add mean
+    return x
+
+def loglike(theta, x, data, data_err, model_func, y=None, args=None):
+    ''' Calculates chi-squared likelihood for parameter estimation with MCMC or nested sampling.
+
+        Parameters
+        ----------
+        theta : 1-D numpy array
+            Model parameters
+        x : 1-D numpy array
+            Data x coordinates
+        data : 1-D/2-D numpy array
+            Data values
+        data_err : 1-D/2-D numpy array
+            Errors associated with data
+        model_func : function
+            Model function
+        y : 1-D numpy array
+            Data y coordinates; None if data is 1-D
+        args : 1-D numpy array
+            Additional arguments taken in by model; None if model does not take in additional arguments
+
+        Returns
+        -------
+        likelihood : float
+            Likelihood probability
+
+    '''
+    if y is None:
+        if args is None:
+            model = model_func(theta, x)
+        else:
+            model = model_func(theta, x, *args)
+    else:
+        if args is None:
+            model = model_func(theta, x, y)
+        else:
+            model = model_func(theta, x, y, *args)
+    inv_sigma2 = 1.0 / (data_err**2)
+    return -0.5 * (np.nansum((data-model)**2 * inv_sigma2 - np.log(inv_sigma2)))
 
