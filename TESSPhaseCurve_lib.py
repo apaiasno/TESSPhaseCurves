@@ -38,10 +38,17 @@ def psi_star_func(params, t):
     return psi_star(t, *params)
 
 ## Total lightcurve ##
+# With pulsations
 psi_tot = lambda t, t_0, P, PI, alpha, beta, fp, delta, A1, B1, A2, B2, A3, B3: \
 (psi_p(t, t_0, P, fp, B1, delta) + Theta(t, t_0, PI, alpha, beta) * psi_star_sum(t, t_0, P, A1, A2, B2, A3, B3))/(1. + fp)
 def psi_tot_func(params, t):
     return psi_tot(t, *params)
+
+# With no pulsations
+psi_tot_no_pulse = lambda t, t_0, P, fp, delta, A1, B1, A2, B2, A3, B3: \
+(psi_p(t, t_0, P, fp, B1, delta) + psi_star_sum(t, t_0, P, A1, A2, B2, A3, B3))/(1. + fp)
+def psi_tot_func_no_pulse(params, t):
+    return psi_tot_no_pulse(t, *params)
 
 ### Data transformations to isolate specific components ###
 def lc_transform_planet(lc, t_0, P, PI, alpha, beta, fp, A1, A2, B2, A3, B3):
@@ -181,16 +188,88 @@ def fold_lk(lc, P, epoch_time):
         lc_fold : Lightkurve object
             Lightkurve object with orbital phase (unitless) given by time attribute
     '''
-    lc_fold = lc.fold(P, epoch_time=epoch_time, wrap_phase=1*u.dimensionless_unscaled, 
-                                        normalize_phase=True)
+    lc_fold = lc.fold(P, epoch_time=epoch_time, normalize_phase=True)
+    lc_fold.time[lc_fold.time < 0] = lc_fold.time[lc_fold.time < 0] + 1.
     ind_order = np.argsort(lc_fold.time)
 
-    lc_dict = {'time': lc_fold.time[ind_order] * u.day,
+    lc_dict = {'time': lc_fold.time[ind_order]*u.day,
                'flux': lc_fold.flux[ind_order],
                'flux_err': lc_fold.flux_err[ind_order]
               }
     lc_fold = lk.LightCurve(lc_dict)
     return lc_fold
+
+
+def create_transit_mask(lc, period, transit_time, duration):
+    '''Creates a mask to identify data points that fall within the transit or eclipse
+    
+    Parameters
+    ----------
+    lc : Lightkurve object
+        A Lightkurve object with time in units of days
+    period : float with time units
+        Orbital period of planet
+    transit_time : float with time units
+        Mid-transit time
+    duration : float with time units
+        Duration of planetary transit
+        
+    Returns
+    -------
+    mask : numpy array
+        Mask of points within the transit or eclipse
+    '''
+    
+    # Converting observation times to phases relative to orbital period
+    phase = ((lc.time.value*u.day - transit_time) % period) / period
+    
+    # Removing units
+    phase = phase.value
+    
+    # Converting transit duration from units of days to units of phase
+    duration_phase = (duration.to(u.day) / period.to(u.day)).value
+    
+    # Build of mask of True/False where True = during transit/eclipse
+    mask = phase < duration_phase / 2  # Masking second half of transit
+    mask += abs(phase - 0.5) < duration_phase / 2  # Masking secondary eclipse
+    mask += phase > 1 - duration_phase / 2  # Masking first half of transit
+    return mask
+
+def segment_analysis(time_segment, flux_segment, P):
+    '''
+    Analyzes time segments between momentum dumps and assigns a 0th order polynomials for abnormally short lengths of data within 
+    segments, otherwise assigns a 1st order polynomial if data is a good length
+    
+    Parameters
+    ----------
+    time_segment : array-like
+        Array containing time values for the segment
+    flux_segment : array-like
+        Array containing flux values corresponding to time values in the segment
+    P : float
+        Orbital period of planet
+        
+    Returns
+    -------
+    normalization_deg : array-like
+        An array containing the degree of polynomial
+    '''
+    # Create a mask for nan values in segment
+    nanmask = np.isnan(flux_segment)
+    timevalue = time_segment[~nanmask]
+    segment_dur = max(timevalue) - min(timevalue)
+    normalization_deg = int(segment_dur/(P))
+    
+#     # Check if length of time segment is less than 2*P
+#     if ( (max(timevalue) - min(timevalue)) ) < 2 * P.value:
+#         # Fit 0th order polynomial
+#         p = np.polyfit(time_segment, flux_segment, 0)
+#         normalization_deg = np.polyval(p, time_segment)
+#     else:
+#         # Fit 1st order polynomial
+#         p = np.polyfit(time_segment, flux_segment, 1)
+#         normalization_deg = np.polyval(p, time_segment)
+    return normalization_deg
 
 ### Bayesian functions for parameter estimation with dynesty ###
 def prior_transform(unif, priors, priors_bool):
