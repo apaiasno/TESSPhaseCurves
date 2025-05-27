@@ -350,3 +350,75 @@ def loglike(theta, x, data, data_err, model_func, y=None, args=None):
     inv_sigma2 = 1.0 / (data_err**2)
     return -0.5 * (np.nansum((data-model)**2 * inv_sigma2 - np.log(inv_sigma2)))
 
+def logPrior(theta, priors, priors_bool):
+    ''' Calculates gaussian/uniform priors for MCMC fitting.
+        
+        Parameters
+        ----------
+        theta : 1-D numpy array
+            Model parameters
+        priors : 2-D numpy array 
+            Pairs of values representing prior ranges for each model parameter
+        priors_bool : 1-D boolean array
+            True if uniform prior, False if Gaussian prior
+        
+        Returns
+        -------
+        prior_norm : float 
+            Prior probability
+    '''
+    priors_uniform = priors[priors_bool]
+    theta_uniform = theta[priors_bool]
+    prior_norm = 0
+    # Uniform priors
+    for i, prior in enumerate(priors_uniform):
+        lower, upper = prior
+        if not (lower < theta_uniform[i] < upper):
+            prior_norm += -np.inf
+        else:
+            prior_norm += np.log(1./(upper-lower))
+    # Gaussian priors
+    priors_gauss = priors[~priors_bool]
+    priors_gauss_center, priors_gauss_width = priors_gauss[:,0], priors_gauss[:,1]
+    theta_gauss = theta[~priors_bool]
+    coef = np.sum(-np.log(priors_gauss_width*np.sqrt(2.*np.pi)))
+    chi2 = np.sum(((theta_gauss-priors_gauss_center)/priors_gauss_width)**2.)
+    exponent = -chi2/2.
+    prior_norm += coef + exponent
+    return prior_norm#/len(theta)
+
+def logPosterior(theta, priors, priors_bool, x, data, data_err, model_func, y=None, args=None):
+    ''' Calculates posterior for MCMC fitting.
+        
+        Parameters
+        ----------
+        theta : 1-D numpy array
+            Model parameters
+        priors : 2-D numpy array 
+            Pairs of values representing prior ranges for each model parameter
+        priors_bool : 1-D boolean array
+            True if uniform prior, False if Gaussian prior
+        x : 1-D numpy array
+            Data x coordinates
+        data : 1-D/2-D numpy array
+            Data values
+        data_err : 1-D/2-D numpy array
+            Errors associated with data
+        model_func : function 
+            Model function
+        y : 1-D numpy array
+            Data y coordinates; None if data is 1-D
+        args : 1-D numpy array
+            Additional arguments taken in by model; None if model does not take in additional arguments
+            
+       Returns
+       ------- 
+       post : float
+            Posterior probability
+    '''
+    scale = np.product(np.shape(data))
+    prior = logPrior(theta, priors, priors_bool)
+    likelihood = loglike(theta, x, data, data_err, model_func, y, args)
+    post = scale*prior + likelihood        
+#    post = prior + likelihood
+    return post
